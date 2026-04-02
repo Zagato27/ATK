@@ -1,7 +1,34 @@
 """Shared fixtures for framework unit tests."""
+import logging
+import os
+import sys
+from pathlib import Path
+
 import pytest
 
-from agent_test_kit import AgentResponse, BaseAgentClient, AgentSession
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - optional in CI/local envs
+    def load_dotenv(*args, **kwargs):
+        return False
+
+load_dotenv()
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from agent_test_kit import (
+    AgentResponse,
+    BaseAgentClient,
+    AgentSession,
+    ConfiguredAgentClient,
+    create_judge_from_config,
+    get_config,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class MockClient(BaseAgentClient):
@@ -40,8 +67,49 @@ def mock_client():
     return MockClient()
 
 
+# ======================================================================
+# Config-driven fixtures for generic/integration tests
+# ======================================================================
+
+@pytest.fixture(scope="session")
+def agent_client():
+    """HTTP client for the tested agent service configured in [agent]."""
+    cfg = get_config().agent
+    logger.info(
+        "agent_client: %s (init=%s, chat=%s)",
+        cfg.base_url,
+        cfg.init_path,
+        cfg.chat_path,
+    )
+    return ConfiguredAgentClient(cfg)
+
+
+@pytest.fixture(scope="session")
+def judge_llm():
+    """Real judge built from config. No mock fallback is used."""
+    cfg = get_config()
+    has_direct_key = bool(cfg.judge.api_key)
+    has_env_key = bool(cfg.judge.api_key_env and os.getenv(cfg.judge.api_key_env))
+
+    if not (has_direct_key or has_env_key):
+        raise RuntimeError(
+            "Judge is not configured. Set [judge].api_key or [judge].api_key_env "
+            "in agent-test-kit.toml."
+        )
+
+    judge = create_judge_from_config(cfg.judge)
+    logger.info(
+        "judge_llm: REAL %s → %s (%s)",
+        cfg.judge.provider,
+        cfg.judge.model_name,
+        cfg.judge.api_base_url or "default endpoint",
+    )
+    return judge
+
+
 @pytest.fixture
-def session(mock_client):
-    s = AgentSession(client=mock_client)
+def session(agent_client):
+    """AgentSession wired to the configured agent service."""
+    s = AgentSession(client=agent_client)
     s.init_session()
     return s

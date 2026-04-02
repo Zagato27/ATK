@@ -13,12 +13,15 @@ authors = [{ name = "KASKO Team" }]
 
 dependencies = [
     "pytest>=8.0",
-    "deepeval>=2.0",
     "requests>=2.31",
     "python-dotenv>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+deepeval = [
+    "deepeval>=2.0",
+]
 gigachat = [
     "langchain-gigachat>=0.3",
     "langchain-core>=0.3",
@@ -29,10 +32,14 @@ openai = [
 anthropic = [
     "anthropic>=0.30",
 ]
+allure = [
+    "allure-pytest>=2.13",
+]
 all = [
-    "agent-test-kit[gigachat,openai,anthropic]",
+    "agent-test-kit[allure,deepeval,gigachat,openai,anthropic]",
 ]
 dev = [
+    "allure-pytest>=2.13",
     "pytest>=8.0",
     "ruff>=0.4",
 ]
@@ -45,3 +52,7 @@ packages = ["src/agent_test_kit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "judge: tests that use LLM-as-Judge style evaluation",
+    "slow: slower-running tests such as repeated runs or concurrency checks",
+]

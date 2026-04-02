@@ -5,9 +5,10 @@
 - **Fluent API** — тесты читаются как пользовательские сценарии
 - **Два уровня проверок** — детерминированные `expect_*` + семантические LLM-as-Judge `evaluate()`
 - **MetricRegistry** — именованные критерии оценки, built-in + свои
-- **70+ готовых тестов** — edge cases, security, format, memory, performance из коробки
+- **90+ готовых тестов** — edge cases, security, format, style, language, scope, memory, latency, concurrency из коробки
 - **Единый конфиг** — `agent-test-kit.toml` для всех порогов и параметров
 - **pytest plugin** — маркеры `judge` / `slow` + фикстура `atk_config`
+- **Опциональный Allure** — автоматические labels, environment и session / G-Eval attachments
 
 ## Установка
 
@@ -21,6 +22,9 @@ pip install -e ".[gigachat]"
 
 # все судьи сразу:
 pip install -e ".[all]"
+
+# Allure-репорты:
+pip install -e ".[allure]"
 ```
 
 ## Quick Start
@@ -64,7 +68,7 @@ class MySession(AgentSession):
 ```python
 from agent_test_kit import default_registry
 
-registry = default_registry()  # включает built-in (security_refusal, politeness, …)
+registry = default_registry()  # включает built-in (prompt_injection_refusal, politeness, …)
 registry.register("my_metric", "1. Criterion A\n2. Criterion B")
 ```
 
@@ -129,53 +133,116 @@ python -m pytest
 
 ## Готовые тест-кейсы (Generic Tests)
 
-Фреймворк включает **70+ готовых тестов**, общих для всех LLM-агентов. Чтобы подключить их, достаточно наследовать нужный класс — тесты заработают с вашей фикстурой `session`:
+Фреймворк включает **90+ готовых тестов**, общих для всех LLM-агентов. Чтобы подключить их, достаточно наследовать нужный класс — тесты заработают с вашей фикстурой `session`:
 
 ```python
 # tests/test_generic.py
 from agent_test_kit.generic_tests import (
     GenericEdgeCaseTests,
-    GenericSecurityTests,
-    GenericFormatTests,
-    GenericOutOfScopeTests,
-    GenericMemoryTests,
-    GenericStabilityTests,
-    GenericPerformanceTests,
+    GenericPromptSecurityTests,
+    GenericSocialEngineeringTests,
+    GenericJailbreakResistanceTests,
+    GenericPrivacyTests,
+    GenericPayloadSafetyTests,
+    GenericSurfaceFormatTests,
+    GenericStyleTests,
+    GenericLanguageTests,
+    GenericOffTopicRefusalTests,
+    GenericMixedIntentTests,
+    GenericScopeRecoveryTests,
+    GenericRecallTests,
+    GenericCorrectionTests,
+    GenericLongContextTests,
+    GenericReproducibilityTests,
+    GenericParaphraseConsistencyTests,
+    GenericSessionResilienceTests,
+    GenericLatencyTests,
+    GenericConcurrencyTests,
 )
 
 class TestEdgeCases(GenericEdgeCaseTests):
     pass
 
-class TestSecurity(GenericSecurityTests):
+class TestPromptSecurity(GenericPromptSecurityTests):
     pass
 
-class TestFormat(GenericFormatTests):
+class TestSocialEngineering(GenericSocialEngineeringTests):
     pass
 
-class TestOutOfScope(GenericOutOfScopeTests):
+class TestJailbreak(GenericJailbreakResistanceTests):
     pass
 
-class TestMemory(GenericMemoryTests):
+class TestPrivacy(GenericPrivacyTests):
     pass
 
-class TestStability(GenericStabilityTests):
+class TestPayloadSafety(GenericPayloadSafetyTests):
     pass
 
-class TestPerformance(GenericPerformanceTests):
-    # можно переопределить пороги
-    FIRST_MESSAGE_LATENCY = 45.0
-    PARALLEL_COUNT = 5
+class TestSurfaceFormat(GenericSurfaceFormatTests):
+    pass
+
+class TestStyle(GenericStyleTests):
+    pass
+
+class TestLanguage(GenericLanguageTests):
+    pass
+
+class TestOffTopic(GenericOffTopicRefusalTests):
+    pass
+
+class TestMixedIntent(GenericMixedIntentTests):
+    pass
+
+class TestScopeRecovery(GenericScopeRecoveryTests):
+    pass
+
+class TestRecall(GenericRecallTests):
+    pass
+
+class TestCorrections(GenericCorrectionTests):
+    pass
+
+class TestLongContext(GenericLongContextTests):
+    pass
+
+class TestReproducibility(GenericReproducibilityTests):
+    pass
+
+class TestParaphraseConsistency(GenericParaphraseConsistencyTests):
+    pass
+
+class TestSessionResilience(GenericSessionResilienceTests):
+    pass
+
+class TestLatency(GenericLatencyTests):
+    pass
+
+class TestConcurrency(GenericConcurrencyTests):
+    pass
 ```
 
 | Категория | Класс | Тестов | Маркеры |
 |-----------|-------|--------|---------|
 | Граничные случаи | `GenericEdgeCaseTests` | 21 | — |
-| Безопасность | `GenericSecurityTests` | 20 | `judge` |
-| Формат общения | `GenericFormatTests` | 11 | `judge` (2) |
-| Out-of-scope | `GenericOutOfScopeTests` | 5 | `judge` |
-| Память и контекст | `GenericMemoryTests` | 10 | `judge`, `slow` |
-| Стабильность | `GenericStabilityTests` | 4 | `slow`, `judge` |
-| Производительность | `GenericPerformanceTests` | 7 | `slow` |
+| Prompt security | `GenericPromptSecurityTests` | 9 | `judge` |
+| Social engineering | `GenericSocialEngineeringTests` | 2 | `judge` |
+| Jailbreak | `GenericJailbreakResistanceTests` | 4 | `judge` |
+| Privacy | `GenericPrivacyTests` | 6 | `judge` (1) |
+| Payload safety | `GenericPayloadSafetyTests` | 4 | — |
+| Поверхностный формат | `GenericSurfaceFormatTests` | 9 | — |
+| Стиль общения | `GenericStyleTests` | 4 | `judge` |
+| Языковая политика | `GenericLanguageTests` | 2 | — |
+| Off-topic отказ | `GenericOffTopicRefusalTests` | 10 | `judge` |
+| Mixed intent | `GenericMixedIntentTests` | 2 | `judge` |
+| Scope recovery | `GenericScopeRecoveryTests` | 2 | `judge` |
+| Recall | `GenericRecallTests` | 4 | `judge` (2) |
+| Исправления | `GenericCorrectionTests` | 3 | `judge` (1) |
+| Длинный контекст | `GenericLongContextTests` | 3 | `judge`, `slow` |
+| Reproducibility | `GenericReproducibilityTests` | 2 | `slow` |
+| Paraphrase consistency | `GenericParaphraseConsistencyTests` | 2 | `slow` |
+| Session resilience | `GenericSessionResilienceTests` | 2 | `slow` |
+| Латентность | `GenericLatencyTests` | 4 | `slow` |
+| Параллельность | `GenericConcurrencyTests` | 2 | `slow` |
 
 ## Архитектура
 
@@ -188,7 +255,7 @@ agent_test_kit/
 ├── metrics.py        MetricRegistry + built-in метрики
 ├── helpers.py        run_dialogue и утилиты
 ├── pytest_plugin.py  Маркеры judge/slow (auto-registered)
-└── generic_tests/    70+ готовых тест-кейсов по 7 категориям
+└── generic_tests/    90+ готовых тест-кейсов по 20 категориям
 ```
 
 ## LLM-судьи
@@ -251,20 +318,31 @@ def judge_llm():
 Все пороги и параметры вынесены в один TOML-файл. Положите `agent-test-kit.toml` в корень проекта (рядом с `pyproject.toml`):
 
 ```toml
-[performance]
+[latency]
 first_message_latency = 45.0
+
+[concurrency]
 parallel_count = 5
 
-[security]
+[prompt_security]
 judge_threshold = 0.8
+
+[privacy]
+judge_threshold = 0.7
 pii_patterns = [
     "\\b\\d{4}\\s?\\d{6}\\b",
     "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    "[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}",
 ]
 
-[memory]
-context_threshold = 0.8
-correction_threshold = 0.7
+[recall]
+judge_threshold = 0.8
+
+[corrections]
+judge_threshold = 0.7
+
+[long_context]
+judge_threshold = 0.6
 
 [evaluate]
 default_threshold = 0.7
@@ -273,7 +351,7 @@ default_threshold = 0.7
 Альтернативно, секции можно добавить в `pyproject.toml`:
 
 ```toml
-[tool.agent-test-kit.performance]
+[tool.agent-test-kit.latency]
 first_message_latency = 45.0
 ```
 
@@ -285,10 +363,29 @@ first_message_latency = 45.0
 from agent_test_kit import get_config
 
 cfg = get_config()
-cfg.performance.first_message_latency  # 45.0
+cfg.latency.first_message_latency  # 45.0
 ```
 
 Если не передавать `threshold` в `evaluate()`, используется `cfg.evaluate.default_threshold`.
+
+## Allure
+
+Интеграция работает автоматически через pytest-плагин, если установлен extra `allure` и тесты запускаются с `--alluredir`.
+
+```bash
+pip install -e ".[dev,allure]"
+python -m pytest --alluredir .allure-results
+allure serve .allure-results
+```
+
+Что добавляется в отчёт автоматически:
+
+- labels `ATK` / feature / markers
+- `environment.properties` и `categories.json`
+- `test-meta.json`
+- trace из `AgentSession`, история диалога и последний G-Eval result
+
+Вложения проходят через базовую санитизацию: ключи вроде `api_key` / `token` редактируются, а типовые email / phone / card-паттерны в тексте маскируются.
 
 ## Расширение
 
@@ -312,10 +409,16 @@ client = MyAgentClient(
 
 | Метрика | Что оценивает |
 |---------|---------------|
-| `security_refusal` | Отказ на prompt injection / манипуляцию |
+| `prompt_injection_refusal` | Отказ на прямой prompt injection |
+| `prompt_extraction_refusal` | Отказ на попытку извлечь скрытые инструкции |
+| `social_engineering_refusal` | Устойчивость к манипуляции через авторитет и срочность |
+| `jailbreak_resistance` | Устойчивость к jailbreak-попыткам |
+| `data_isolation_refusal` | Отказ на раскрытие данных других пользователей / сессий |
 | `politeness` | Вежливость и стиль общения |
 | `context_retention` | Удержание контекста диалога |
-| `out_of_scope_handling` | Реакция на off-topic |
+| `off_topic_refusal` | Корректный отказ на явно off-topic запрос |
+| `mixed_intent_handling` | Обработка смешанного in-scope + off-topic запроса |
+| `scope_recovery` | Возврат к основному сценарию после detour |
 | `correction_handling` | Обработка исправлений от пользователя |
 | `data_extraction` | Корректность извлечения данных |
 

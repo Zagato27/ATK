@@ -48,3 +48,11 @@ Desktop.ini
 
 # Logs
 *.log
+
+# ATK / DeepEval caches
+.atk_cache/
+.deepeval/
+
+
+# Allure results
+.allure-results/

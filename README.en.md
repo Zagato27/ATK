@@ -5,9 +5,10 @@ A reusable testing framework for LLM agents.
 - **Fluent API** — tests read like user scenarios
 - **Two levels of checks** — deterministic `expect_*` + semantic LLM-as-Judge `evaluate()`
 - **MetricRegistry** — named evaluation criteria, built-in + custom
-- **70+ ready-made tests** — edge cases, security, format, memory, performance out of the box
+- **90+ ready-made tests** — edge cases, security, format, style, language, scope, memory, latency, concurrency out of the box
 - **Single config file** — `agent-test-kit.toml` for all thresholds and parameters
 - **pytest plugin** — `judge` / `slow` markers + `atk_config` fixture
+- **Optional Allure integration** — automatic labels, environment data, and session / G-Eval attachments
 
 ## Installation
 
@@ -21,6 +22,9 @@ pip install -e ".[gigachat]"
 
 # all judges at once:
 pip install -e ".[all]"
+
+# Allure reports:
+pip install -e ".[allure]"
 ```
 
 ## Quick Start
@@ -64,7 +68,7 @@ class MySession(AgentSession):
 ```python
 from agent_test_kit import default_registry
 
-registry = default_registry()  # includes built-in (security_refusal, politeness, …)
+registry = default_registry()  # includes built-in (prompt_injection_refusal, politeness, …)
 registry.register("my_metric", "1. Criterion A\n2. Criterion B")
 ```
 
@@ -129,53 +133,116 @@ python -m pytest
 
 ## Ready-Made Test Suites (Generic Tests)
 
-The framework ships with **70+ ready-made tests** common to all LLM agents. To use them, simply inherit the desired class — tests will run automatically with your `session` fixture:
+The framework ships with **90+ ready-made tests** common to all LLM agents. To use them, simply inherit the desired class — tests will run automatically with your `session` fixture:
 
 ```python
 # tests/test_generic.py
 from agent_test_kit.generic_tests import (
     GenericEdgeCaseTests,
-    GenericSecurityTests,
-    GenericFormatTests,
-    GenericOutOfScopeTests,
-    GenericMemoryTests,
-    GenericStabilityTests,
-    GenericPerformanceTests,
+    GenericPromptSecurityTests,
+    GenericSocialEngineeringTests,
+    GenericJailbreakResistanceTests,
+    GenericPrivacyTests,
+    GenericPayloadSafetyTests,
+    GenericSurfaceFormatTests,
+    GenericStyleTests,
+    GenericLanguageTests,
+    GenericOffTopicRefusalTests,
+    GenericMixedIntentTests,
+    GenericScopeRecoveryTests,
+    GenericRecallTests,
+    GenericCorrectionTests,
+    GenericLongContextTests,
+    GenericReproducibilityTests,
+    GenericParaphraseConsistencyTests,
+    GenericSessionResilienceTests,
+    GenericLatencyTests,
+    GenericConcurrencyTests,
 )
 
 class TestEdgeCases(GenericEdgeCaseTests):
     pass
 
-class TestSecurity(GenericSecurityTests):
+class TestPromptSecurity(GenericPromptSecurityTests):
     pass
 
-class TestFormat(GenericFormatTests):
+class TestSocialEngineering(GenericSocialEngineeringTests):
     pass
 
-class TestOutOfScope(GenericOutOfScopeTests):
+class TestJailbreak(GenericJailbreakResistanceTests):
     pass
 
-class TestMemory(GenericMemoryTests):
+class TestPrivacy(GenericPrivacyTests):
     pass
 
-class TestStability(GenericStabilityTests):
+class TestPayloadSafety(GenericPayloadSafetyTests):
     pass
 
-class TestPerformance(GenericPerformanceTests):
-    # override thresholds to match your SLA
-    FIRST_MESSAGE_LATENCY = 45.0
-    PARALLEL_COUNT = 5
+class TestSurfaceFormat(GenericSurfaceFormatTests):
+    pass
+
+class TestStyle(GenericStyleTests):
+    pass
+
+class TestLanguage(GenericLanguageTests):
+    pass
+
+class TestOffTopic(GenericOffTopicRefusalTests):
+    pass
+
+class TestMixedIntent(GenericMixedIntentTests):
+    pass
+
+class TestScopeRecovery(GenericScopeRecoveryTests):
+    pass
+
+class TestRecall(GenericRecallTests):
+    pass
+
+class TestCorrections(GenericCorrectionTests):
+    pass
+
+class TestLongContext(GenericLongContextTests):
+    pass
+
+class TestReproducibility(GenericReproducibilityTests):
+    pass
+
+class TestParaphraseConsistency(GenericParaphraseConsistencyTests):
+    pass
+
+class TestSessionResilience(GenericSessionResilienceTests):
+    pass
+
+class TestLatency(GenericLatencyTests):
+    pass
+
+class TestConcurrency(GenericConcurrencyTests):
+    pass
 ```
 
 | Category | Class | Tests | Markers |
 |----------|-------|-------|---------|
 | Edge cases | `GenericEdgeCaseTests` | 21 | — |
-| Security | `GenericSecurityTests` | 20 | `judge` |
-| Format & style | `GenericFormatTests` | 11 | `judge` (2) |
-| Out-of-scope | `GenericOutOfScopeTests` | 5 | `judge` |
-| Memory & context | `GenericMemoryTests` | 10 | `judge`, `slow` |
-| Stability | `GenericStabilityTests` | 4 | `slow`, `judge` |
-| Performance | `GenericPerformanceTests` | 7 | `slow` |
+| Prompt security | `GenericPromptSecurityTests` | 9 | `judge` |
+| Social engineering | `GenericSocialEngineeringTests` | 2 | `judge` |
+| Jailbreak | `GenericJailbreakResistanceTests` | 4 | `judge` |
+| Privacy | `GenericPrivacyTests` | 6 | `judge` (1) |
+| Payload safety | `GenericPayloadSafetyTests` | 4 | — |
+| Surface format | `GenericSurfaceFormatTests` | 9 | — |
+| Communication style | `GenericStyleTests` | 4 | `judge` |
+| Language policy | `GenericLanguageTests` | 2 | — |
+| Off-topic refusal | `GenericOffTopicRefusalTests` | 10 | `judge` |
+| Mixed intent | `GenericMixedIntentTests` | 2 | `judge` |
+| Scope recovery | `GenericScopeRecoveryTests` | 2 | `judge` |
+| Recall | `GenericRecallTests` | 4 | `judge` (2) |
+| Corrections | `GenericCorrectionTests` | 3 | `judge` (1) |
+| Long context | `GenericLongContextTests` | 3 | `judge`, `slow` |
+| Reproducibility | `GenericReproducibilityTests` | 2 | `slow` |
+| Paraphrase consistency | `GenericParaphraseConsistencyTests` | 2 | `slow` |
+| Session resilience | `GenericSessionResilienceTests` | 2 | `slow` |
+| Latency | `GenericLatencyTests` | 4 | `slow` |
+| Concurrency | `GenericConcurrencyTests` | 2 | `slow` |
 
 ## Architecture
 
@@ -188,7 +255,7 @@ agent_test_kit/
 ├── metrics.py        MetricRegistry + built-in metrics
 ├── helpers.py        run_dialogue and utilities
 ├── pytest_plugin.py  judge/slow markers (auto-registered)
-└── generic_tests/    70+ ready-made test cases across 7 categories
+└── generic_tests/    90+ ready-made test cases across 20 categories
 ```
 
 ## LLM Judges
@@ -251,20 +318,31 @@ def judge_llm():
 All thresholds and parameters live in a single TOML file. Place `agent-test-kit.toml` in your project root (next to `pyproject.toml`):
 
 ```toml
-[performance]
+[latency]
 first_message_latency = 45.0
+
+[concurrency]
 parallel_count = 5
 
-[security]
+[prompt_security]
 judge_threshold = 0.8
+
+[privacy]
+judge_threshold = 0.7
 pii_patterns = [
     "\\b\\d{4}\\s?\\d{6}\\b",
     "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    "[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}",
 ]
 
-[memory]
-context_threshold = 0.8
-correction_threshold = 0.7
+[recall]
+judge_threshold = 0.8
+
+[corrections]
+judge_threshold = 0.7
+
+[long_context]
+judge_threshold = 0.6
 
 [evaluate]
 default_threshold = 0.7
@@ -273,7 +351,7 @@ default_threshold = 0.7
 Alternatively, add sections under `[tool.agent-test-kit]` in `pyproject.toml`:
 
 ```toml
-[tool.agent-test-kit.performance]
+[tool.agent-test-kit.latency]
 first_message_latency = 45.0
 ```
 
@@ -285,10 +363,29 @@ The config is available via the `atk_config` fixture or programmatically:
 from agent_test_kit import get_config
 
 cfg = get_config()
-cfg.performance.first_message_latency  # 45.0
+cfg.latency.first_message_latency  # 45.0
 ```
 
 If you omit `threshold` in `evaluate()`, it uses `cfg.evaluate.default_threshold`.
+
+## Allure
+
+The integration works automatically through the pytest plugin when the `allure` extra is installed and tests are run with `--alluredir`.
+
+```bash
+pip install -e ".[dev,allure]"
+python -m pytest --alluredir .allure-results
+allure serve .allure-results
+```
+
+The report is enriched automatically with:
+
+- `ATK` / feature / marker labels
+- `environment.properties` and `categories.json`
+- `test-meta.json`
+- `AgentSession` traces, dialogue history, and the latest G-Eval result
+
+Attachments go through basic sanitization: keys like `api_key` / `token` are redacted, and common email / phone / card patterns in text are masked.
 
 ## Extending
 
@@ -312,10 +409,16 @@ client = MyAgentClient(
 
 | Metric | What it evaluates |
 |--------|-------------------|
-| `security_refusal` | Refusal of prompt injection / manipulation |
+| `prompt_injection_refusal` | Refusal of direct prompt injection |
+| `prompt_extraction_refusal` | Refusal to reveal hidden instructions |
+| `social_engineering_refusal` | Resistance to authority- / urgency-based manipulation |
+| `jailbreak_resistance` | Resistance to jailbreak attempts |
+| `data_isolation_refusal` | Refusal to reveal other users' / sessions' data |
 | `politeness` | Politeness and communication style |
 | `context_retention` | Maintaining dialogue context |
-| `out_of_scope_handling` | Handling off-topic messages |
+| `off_topic_refusal` | Refusing clearly off-topic requests |
+| `mixed_intent_handling` | Handling mixed in-scope + off-topic requests |
+| `scope_recovery` | Returning to the main scenario after a detour |
 | `correction_handling` | Handling user corrections |
 | `data_extraction` | Correctness of data extraction |
 

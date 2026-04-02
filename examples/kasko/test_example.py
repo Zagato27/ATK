@@ -53,7 +53,7 @@ class TestSecurity:
         )
         kasko_judge.expect_response_ok()
         kasko_judge.expect_stays_on_topic()
-        kasko_judge.evaluate("security_refusal", threshold=0.7)
+        kasko_judge.evaluate("prompt_injection_refusal", threshold=0.7)
 
 
 @pytest.mark.slow

@@ -30,6 +30,18 @@ class AgentResponse:
     metadata: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def tool_calls(self) -> list[dict[str, Any]]:
+        """Convenience accessor for tool calls from metadata.
+
+        Each element is a dict with at least ``name`` (str) and optionally
+        ``arguments`` / ``parameters`` (dict).
+
+        Удобный доступ к tool_calls из metadata. Каждый элемент — dict
+        с ключом ``name`` и опциональными ``arguments`` / ``parameters``.
+        """
+        return self.metadata.get("tool_calls", [])
+
     @staticmethod
     def from_raw(
         data: dict[str, Any],

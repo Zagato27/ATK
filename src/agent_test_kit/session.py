@@ -15,19 +15,34 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any
-
-from deepeval import assert_test
-from deepeval.metrics import GEval
-from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+from typing import Any, Callable
 
 from agent_test_kit.client import BaseAgentClient
 from agent_test_kit.config import get_config
 from agent_test_kit.judge import BaseLLMJudge
 from agent_test_kit.metrics import MetricRegistry, default_registry
 from agent_test_kit.response import AgentResponse
+from agent_test_kit.statistical import Distribution, RunResult, run_n_times
 
 logger = logging.getLogger(__name__)
+
+_SESSION_OBSERVER: Callable[["AgentSession"], None] | None = None
+
+
+def _install_session_observer(
+    observer: Callable[["AgentSession"], None] | None,
+) -> Callable[["AgentSession"], None] | None:
+    global _SESSION_OBSERVER
+    previous = _SESSION_OBSERVER
+    _SESSION_OBSERVER = observer
+    return previous
+
+
+def _restore_session_observer(
+    observer: Callable[["AgentSession"], None] | None,
+) -> None:
+    global _SESSION_OBSERVER
+    _SESSION_OBSERVER = observer
 
 
 class AgentSession:
@@ -62,15 +77,42 @@ class AgentSession:
         self._last: AgentResponse | None = None
         self._turn: int = 0
         self._timings: list[float] = []
+        self._last_eval_result: Any = None
+        if _SESSION_OBSERVER is not None:
+            try:
+                _SESSION_OBSERVER(self)
+            except Exception:  # pragma: no cover - diagnostics must stay best-effort
+                logger.debug("session observer failed", exc_info=True)
 
     # -- lifecycle ----------------------------------------------------------
 
     def init_session(self, **kwargs: Any) -> "AgentSession":
         """Call ``client.create_session`` and store the init payload. / Вызывает ``client.create_session`` и сохраняет init payload."""
+        if self._should_log_debug():
+            logger.debug(
+                "session.init_session(): kwargs=%s",
+                self._short_repr(kwargs, self._log_prompt_limit()),
+            )
         self._init_data = self._client.create_session(**kwargs)
         self._init_message = self._init_data.get("message", "")
+        self._last_eval_result = None
         if self._init_message:
             self._history = [{"role": "assistant", "content": self._init_message}]
+        if self._should_log_debug():
+            logger.debug(
+                "session.init_session(): session_id=%s keys=%s",
+                self._client.session_id,
+                list(self._init_data.keys()),
+            )
+            if self._init_message:
+                logger.debug(
+                    "session.init_session(): received init message:\n%s",
+                    self._short_text(self._init_message, self._log_response_limit()),
+                )
+            logger.debug(
+                "session.init_session(): raw init payload:\n%s",
+                self._short_repr(self._init_data, self._log_response_limit()),
+            )
         return self
 
     def reset(self, **kwargs: Any) -> "AgentSession":
@@ -82,6 +124,7 @@ class AgentSession:
         self._timings = []
         self._init_data = None
         self._init_message = ""
+        self._last_eval_result = None
         return self.init_session(**kwargs)
 
     # -- sending messages ---------------------------------------------------
@@ -89,12 +132,49 @@ class AgentSession:
     def send(self, message: str, **kwargs: Any) -> "AgentSession":
         """Send a user message via ``client.send_message``. / Отправляет сообщение пользователя через ``client.send_message``."""
         self._turn += 1
+        if self._should_log_debug():
+            logger.debug(
+                "session.send(turn=%d): outgoing user message:\n%s",
+                self._turn,
+                self._short_text(message, self._log_prompt_limit()),
+            )
+            if kwargs:
+                logger.debug(
+                    "session.send(turn=%d): send kwargs=%s",
+                    self._turn,
+                    self._short_repr(kwargs, self._log_prompt_limit()),
+                )
         start = time.perf_counter()
         self._last = self._client.send_message(message, **kwargs)
+        self._last_eval_result = None
         elapsed = time.perf_counter() - start
         self._timings.append(elapsed)
         self._history.append({"role": "user", "content": message})
         self._history.append({"role": "assistant", "content": self._last.text})
+        if self._should_log_debug():
+            logger.debug(
+                "session.send(turn=%d): received response status=%s latency=%.2fs",
+                self._turn,
+                self._last.status_code,
+                elapsed,
+            )
+            logger.debug(
+                "session.send(turn=%d): agent response:\n%s",
+                self._turn,
+                self._short_text(self._last.text, self._log_response_limit()),
+            )
+            if self._last.metadata:
+                logger.debug(
+                    "session.send(turn=%d): response metadata=%s",
+                    self._turn,
+                    self._short_repr(self._last.metadata, self._log_response_limit()),
+                )
+            if self._last.raw:
+                logger.debug(
+                    "session.send(turn=%d): raw response payload=%s",
+                    self._turn,
+                    self._short_repr(self._last.raw, self._log_response_limit()),
+                )
         return self
 
     # ======================================================================
@@ -201,17 +281,18 @@ class AgentSession:
     ) -> "AgentSession":
         """Response does not contain PII matching *patterns* (regex).
 
-        When *patterns* is ``None``, uses ``security.pii_patterns`` from
+        When *patterns* is ``None``, uses ``privacy.pii_patterns`` from
         ``agent-test-kit.toml`` (defaults to passport, SSN, credit card,
-        phone number patterns).
+        phone number, and email patterns).
 
         Ответ не содержит PII, соответствующего *patterns* (regex). Если
-        *patterns* — ``None``, используются ``security.pii_patterns`` из
-        ``agent-test-kit.toml`` (по умолчанию: паспорт, SSN, карта, телефон).
+        *patterns* — ``None``, используются ``privacy.pii_patterns`` из
+        ``agent-test-kit.toml`` (по умолчанию: паспорт, SSN, карта, телефон
+        и email).
         """
         self._need_response()
         if patterns is None:
-            patterns = get_config().security.pii_patterns
+            patterns = get_config().privacy.pii_patterns
         for pat in patterns:
             matches = re.findall(pat, self._last.text)
             assert not matches, (
@@ -249,6 +330,119 @@ class AgentSession:
             )
         return self
 
+    # -- tool call checks ---------------------------------------------------
+
+    def expect_tool_called(self, name: str) -> "AgentSession":
+        """Assert that a tool with *name* was called (case-insensitive substring match). / Проверяет, что тул *name* был вызван."""
+        self._need_response()
+        names = [tc.get("name", "") for tc in self._last.tool_calls]
+        assert any(name.lower() in n.lower() for n in names), (
+            f"Turn {self._turn}: expected tool '{name}', "
+            f"called: {names}"
+        )
+        return self
+
+    def expect_tool_not_called(self, *names: str) -> "AgentSession":
+        """Assert that none of *names* appear in tool calls. / Проверяет, что ни один из *names* не был вызван."""
+        self._need_response()
+        called = [tc.get("name", "") for tc in self._last.tool_calls]
+        found = [
+            n for n in names
+            if any(n.lower() in c.lower() for c in called)
+        ]
+        assert not found, (
+            f"Turn {self._turn}: tools should NOT have been called: {found}, "
+            f"but called: {called}"
+        )
+        return self
+
+    def expect_tool_sequence(self, expected: list[str]) -> "AgentSession":
+        """Assert that tools were called in exactly this order (case-insensitive). / Проверяет порядок вызова тулов."""
+        self._need_response()
+        actual = [tc.get("name", "") for tc in self._last.tool_calls]
+        actual_lower = [n.lower() for n in actual]
+        expected_lower = [n.lower() for n in expected]
+        assert actual_lower == expected_lower, (
+            f"Turn {self._turn}: expected tool sequence {expected}, "
+            f"got {actual}"
+        )
+        return self
+
+    def expect_tool_params(self, name: str, expected_params: dict) -> "AgentSession":
+        """Assert that the call to *name* includes *expected_params* (subset match). / Проверяет параметры вызова тула *name*."""
+        self._need_response()
+        for tc in self._last.tool_calls:
+            tc_name = tc.get("name", "")
+            if name.lower() not in tc_name.lower():
+                continue
+            args = tc.get("arguments", tc.get("parameters", {}))
+            for key, value in expected_params.items():
+                assert key in args, (
+                    f"Turn {self._turn}: tool '{tc_name}' missing param '{key}'. "
+                    f"Params: {args}"
+                )
+                assert args[key] == value, (
+                    f"Turn {self._turn}: tool '{tc_name}' param '{key}' = "
+                    f"{args[key]!r}, expected {value!r}"
+                )
+            return self
+        called = [tc.get("name", "") for tc in self._last.tool_calls]
+        raise AssertionError(
+            f"Turn {self._turn}: tool '{name}' not found in calls: {called}"
+        )
+
+    def expect_tool_count(
+        self,
+        name: str,
+        *,
+        exactly: int | None = None,
+        at_least: int | None = None,
+        at_most: int | None = None,
+    ) -> "AgentSession":
+        """Assert tool *name* call count (case-insensitive). / Проверяет количество вызовов тула *name*."""
+        self._need_response()
+        count = sum(
+            1 for tc in self._last.tool_calls
+            if name.lower() in tc.get("name", "").lower()
+        )
+        if exactly is not None:
+            assert count == exactly, (
+                f"Turn {self._turn}: tool '{name}' called {count} times, "
+                f"expected exactly {exactly}"
+            )
+        if at_least is not None:
+            assert count >= at_least, (
+                f"Turn {self._turn}: tool '{name}' called {count} times, "
+                f"expected at least {at_least}"
+            )
+        if at_most is not None:
+            assert count <= at_most, (
+                f"Turn {self._turn}: tool '{name}' called {count} times, "
+                f"expected at most {at_most}"
+            )
+        return self
+
+    # -- groundedness checks ------------------------------------------------
+
+    def expect_grounded(self, facts: list[str]) -> "AgentSession":
+        """Assert that every fact appears in the response (case-insensitive).
+
+        Deterministic check: each string from *facts* must be present in
+        the agent's last response text. For semantic groundedness use
+        ``evaluate("groundedness", context=[...])``.
+
+        Детерминированная проверка: каждый факт из *facts* присутствует в ответе
+        агента (без учёта регистра).
+        """
+        self._need_response()
+        text = self._last.text.lower()
+        missing = [f for f in facts if f.lower() not in text]
+        assert not missing, (
+            f"Turn {self._turn}: response not grounded — missing facts: {missing}\n"
+            f"Response: '{self._last.text[:300]}'"
+        )
+        return self
+
     # -- session liveness ---------------------------------------------------
 
     def expect_session_alive(self) -> "AgentSession":
@@ -284,6 +478,113 @@ class AgentSession:
         return self
 
     # ======================================================================
+    # Statistical N-run testing
+    # ======================================================================
+
+    def run_n_times(
+        self,
+        message: str,
+        n: int | None = None,
+        *,
+        evaluate_metric: str | None = None,
+        parallel: bool = False,
+        init_kwargs: dict[str, Any] | None = None,
+        client_factory: Callable[[], BaseAgentClient] | None = None,
+    ) -> Distribution:
+        """Send *message* N times in fresh sessions and collect a :class:`Distribution`.
+
+        Each run creates a new session via ``init_session(**init_kwargs)``,
+        sends *message*, and records pass/fail + latency. If *evaluate_metric*
+        is given, runs ``evaluate_direct()`` and records the semantic score.
+
+        Отправляет *message* N раз в свежих сессиях, собирая Distribution.
+        """
+        cfg = get_config().statistical
+        n = n or cfg.default_n_runs
+        kw = init_kwargs or {}
+        eval_threshold = get_config().evaluate.default_threshold
+
+        if parallel and client_factory is None:
+            raise ValueError(
+                "parallel=True requires client_factory to avoid shared-client races"
+            )
+        if evaluate_metric and self._judge is None:
+            raise ValueError(
+                "evaluate_metric requires a configured LLM judge"
+            )
+
+        def _one_run() -> RunResult:
+            client = client_factory() if client_factory is not None else self._client
+            s = AgentSession(
+                client=client,
+                judge=self._judge,
+                registry=self._registry,
+            )
+            s.init_session(**kw)
+            start = time.perf_counter()
+            s.send(message)
+            latency = time.perf_counter() - start
+
+            passed = True
+            error = None
+            try:
+                s.expect_response_ok()
+            except AssertionError as exc:
+                passed = False
+                error = str(exc)
+
+            score = None
+            if evaluate_metric and passed and s._judge is not None:
+                result = s._evaluate_direct_result(
+                    metric_name=evaluate_metric,
+                    threshold=eval_threshold,
+                )
+                s._last_eval_result = result
+                score = result.score
+                if not result.passed:
+                    passed = False
+                    if error is None:
+                        error = (
+                            f"evaluate_direct('{evaluate_metric}') "
+                            f"score={result.score:.3f} < threshold={eval_threshold:.3f}"
+                        )
+
+            return RunResult(
+                passed=passed,
+                score=score,
+                latency=latency,
+                response_text=s.last_text if s._last else "",
+                error=error,
+            )
+
+        return run_n_times(_one_run, n, parallel=parallel)
+
+    @staticmethod
+    def expect_pass_rate(distribution: Distribution, min_rate: float) -> None:
+        """Assert that pass rate >= *min_rate*. / Проверяет, что pass_rate >= min_rate."""
+        assert distribution.pass_rate >= min_rate, (
+            f"Pass rate {distribution.pass_rate:.2%} < required {min_rate:.2%} "
+            f"({sum(1 for r in distribution.results if r.passed)}/{distribution.n} passed)"
+        )
+
+    @staticmethod
+    def expect_score_ci(
+        distribution: Distribution,
+        min_lower_bound: float,
+        confidence: float | None = None,
+    ) -> None:
+        """Assert that the lower bound of the CI >= *min_lower_bound*. / Проверяет, что нижняя граница CI >= min_lower_bound."""
+        cfg = get_config().statistical
+        conf = confidence or cfg.confidence_level
+        lo, hi = distribution.confidence_interval(
+            confidence=conf, n_bootstrap=cfg.bootstrap_samples,
+        )
+        assert lo >= min_lower_bound, (
+            f"{conf:.0%} CI lower bound {lo:.3f} < required {min_lower_bound:.3f} "
+            f"(CI: [{lo:.3f}, {hi:.3f}], mean={distribution.mean_score})"
+        )
+
+    # ======================================================================
     # LLM-as-Judge (DeepEval GEval)
     # ======================================================================
 
@@ -292,24 +593,247 @@ class AgentSession:
         metric_name: str,
         threshold: float | None = None,
         criteria: str | None = None,
+        *,
+        engine: str | None = None,
+        context: list[str] | None = None,
+        expected_output: str | None = None,
+        n_samples: int | None = None,
     ) -> "AgentSession":
         """Run an LLM-as-Judge evaluation on the last response.
 
-        Looks up *metric_name* in the registry unless *criteria* is given
-        explicitly.
+        *engine* selects the backend:
+        - ``"geval"`` (default): DeepEval GEval — backward compatible
+        - ``"direct"``: ATK G-Eval — custom pipeline per the original paper
 
-        Запускает LLM-as-Judge оценку последнего ответа. Ищет *metric_name*
-        в реестре, если *criteria* не задан явно.
+        Запускает LLM-as-Judge оценку последнего ответа.
         """
         assert self._judge is not None, (
             "No LLM judge configured. Pass a BaseLLMJudge to AgentSession."
         )
 
+        cfg = get_config()
+        resolved_engine = engine or cfg.judge.default_engine
+        logger.debug("evaluate(): resolved engine = %s", resolved_engine)
+
+        if resolved_engine == "direct":
+            return self.evaluate_direct(
+                metric_name,
+                threshold=threshold,
+                criteria=criteria,
+                context=context,
+                expected_output=expected_output,
+                n_samples=n_samples,
+            )
+        if resolved_engine != "geval":
+            raise ValueError(
+                f"Unsupported evaluate engine: '{resolved_engine}'. "
+                "Supported values: 'geval', 'direct'"
+            )
+        if cfg.judge.verbose_logging or logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "evaluate(engine='geval'): detailed ATKGEval logs "
+                "(raw judge responses, parsed scores, reasoning) are unavailable. "
+                "Use engine='direct' or set [judge].default_engine='direct'."
+            )
+
+        try:
+            from deepeval import assert_test
+            from deepeval.metrics import GEval
+            from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+        except ImportError as exc:
+            raise ImportError(
+                "evaluate(engine='geval') requires the deepeval package. "
+                "Install with: pip install agent-test-kit[deepeval]  "
+                "Or use engine='direct' for the built-in ATK G-Eval pipeline."
+            ) from exc
+
         if criteria is None:
             criteria = self._registry.get(metric_name)
         if threshold is None:
-            threshold = get_config().evaluate.default_threshold
+            threshold = cfg.evaluate.default_threshold
 
+        actual_output, last_input = self._resolve_eval_io()
+
+        logger.debug(
+            "evaluate(%s, threshold=%.2f, engine=geval)\n  input:  %s\n  output: %s",
+            metric_name, threshold, last_input[:300], actual_output[:500],
+        )
+        if context:
+            logger.debug(
+                "evaluate(%s, engine=geval): context:\n%s",
+                metric_name,
+                self._short_repr(context, self._log_prompt_limit()),
+            )
+        if expected_output:
+            logger.debug(
+                "evaluate(%s, engine=geval): expected_output:\n%s",
+                metric_name,
+                self._short_text(expected_output, self._log_response_limit()),
+            )
+
+        eval_params = [LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT]
+        tc_kwargs: dict[str, Any] = {"input": last_input, "actual_output": actual_output}
+
+        if context:
+            eval_params.append(LLMTestCaseParams.RETRIEVAL_CONTEXT)
+            tc_kwargs["retrieval_context"] = context
+        if expected_output:
+            eval_params.append(LLMTestCaseParams.EXPECTED_OUTPUT)
+            tc_kwargs["expected_output"] = expected_output
+
+        metric = GEval(
+            name=metric_name,
+            model=self._judge,
+            criteria=criteria,
+            evaluation_params=eval_params,
+            threshold=threshold,
+        )
+        test_case = LLMTestCase(**tc_kwargs)
+        assert_test(test_case, [metric])
+        return self
+
+    def evaluate_direct(
+        self,
+        metric_name: str,
+        threshold: float | None = None,
+        criteria: str | None = None,
+        *,
+        context: list[str] | None = None,
+        expected_output: str | None = None,
+        n_samples: int | None = None,
+    ) -> "AgentSession":
+        """Evaluate using ATK G-Eval (custom pipeline per the original paper).
+
+        Returns ``self`` for fluent chaining. The :class:`GEvalResult` is
+        stored in ``last_eval_result``.
+
+        Оценка через ATK G-Eval (собственный pipeline по оригинальной статье).
+        """
+        cfg = get_config()
+        resolved_threshold = threshold or cfg.evaluate.default_threshold
+        result = self._evaluate_direct_result(
+            metric_name=metric_name,
+            threshold=resolved_threshold,
+            criteria=criteria,
+            context=context,
+            expected_output=expected_output,
+            n_samples=n_samples,
+        )
+        self._last_eval_result = result
+
+        assert result.passed, (
+            f"Turn {self._turn}: evaluate_direct('{metric_name}') "
+            f"score={result.score:.3f} < threshold={resolved_threshold:.3f}\n"
+            f"Raw scores: {result.raw_scores}\n"
+            f"Reasoning: {result.reasoning[:500]}"
+        )
+        return self
+
+    def _build_direct_evaluator(self, n_samples: int | None = None) -> Any:
+        """Build a configured ATK G-Eval evaluator instance."""
+        from agent_test_kit.geval import ATKGEval
+
+        cfg = get_config().judge
+        assert self._judge is not None, (
+            "No LLM judge configured. Pass a BaseLLMJudge to AgentSession."
+        )
+        return ATKGEval(
+            judge=self._judge,
+            n_samples=n_samples or cfg.n_samples,
+            score_scale=cfg.score_scale,
+            temperature=cfg.temperature,
+            cot_cache_dir=cfg.cot_cache_dir,
+            system_prompt_version=cfg.system_prompt_version,
+            require_reasoning=cfg.require_reasoning,
+            reasoning_backfill_attempts=cfg.reasoning_backfill_attempts,
+            verbose_logging=cfg.verbose_logging,
+            log_prompt_chars=cfg.log_prompt_chars,
+            log_response_chars=cfg.log_response_chars,
+        )
+
+    def _evaluate_direct_result(
+        self,
+        metric_name: str,
+        threshold: float,
+        criteria: str | None = None,
+        *,
+        context: list[str] | None = None,
+        expected_output: str | None = None,
+        n_samples: int | None = None,
+    ) -> Any:
+        """Run ATK G-Eval and return raw result without assertions."""
+        assert self._judge is not None, (
+            "No LLM judge configured. Pass a BaseLLMJudge to AgentSession."
+        )
+        judge_cls = type(self._judge)
+        judge_name = judge_cls.__name__
+        try:
+            model_name = self._judge.get_model_name()
+        except Exception:
+            model_name = "<unknown>"
+        logger.debug(
+            "ATKGEval judge: class=%s module=%s model=%s",
+            judge_name,
+            judge_cls.__module__,
+            model_name,
+        )
+        if (
+            judge_cls.__module__.startswith("tests.")
+            or judge_cls.__module__.startswith("test_")
+            or judge_cls.__module__ == "__main__"
+        ):
+            logger.warning(
+                "ATKGEval is running with a mock/test judge (%s). "
+                "Reasoning and scores may be synthetic.",
+                judge_name,
+            )
+        if criteria is None:
+            criteria = self._registry.get(metric_name)
+
+        actual_output, last_input = self._resolve_eval_io()
+        logger.debug(
+            "_evaluate_direct_result(%s, threshold=%.2f)\n  input:  %s\n  output: %s",
+            metric_name, threshold, last_input[:300], actual_output[:500],
+        )
+        if context:
+            logger.debug(
+                "_evaluate_direct_result(%s): context:\n%s",
+                metric_name,
+                self._short_repr(context, self._log_prompt_limit()),
+            )
+        if expected_output:
+            logger.debug(
+                "_evaluate_direct_result(%s): expected_output:\n%s",
+                metric_name,
+                self._short_text(expected_output, self._log_response_limit()),
+            )
+        evaluator = self._build_direct_evaluator(n_samples=n_samples)
+        result = evaluator.evaluate(
+            input_text=last_input,
+            output_text=actual_output,
+            criteria=criteria,
+            threshold=threshold,
+            metric_name=metric_name,
+            context=context,
+            expected_output=expected_output,
+        )
+        if self._should_log_debug():
+            logger.debug(
+                "_evaluate_direct_result(%s): final score=%.3f raw_scores=%s passed=%s",
+                metric_name,
+                result.score,
+                result.raw_scores,
+                result.passed,
+            )
+            logger.debug(
+                "_evaluate_direct_result(%s): reasoning:\n%s",
+                metric_name,
+                self._short_text(str(result.reasoning), self._log_response_limit()),
+            )
+        return result
+
+    def _resolve_eval_io(self) -> tuple[str, str]:
+        """Extract (actual_output, last_input) for evaluation. / Извлекает (actual_output, last_input) для оценки."""
         if self._last is not None:
             actual_output = self._last.text
             last_input = (
@@ -320,25 +844,28 @@ class AgentSession:
             last_input = "session init"
         else:
             raise AssertionError("No response available. Call init_session() or send().")
+        return actual_output, last_input
 
-        logger.debug(
-            "evaluate(%s, threshold=%.2f)\n  input:  %s\n  output: %s",
-            metric_name, threshold, last_input[:300], actual_output[:500],
-        )
+    def _should_log_debug(self) -> bool:
+        cfg = get_config().judge
+        return cfg.verbose_logging or logger.isEnabledFor(logging.DEBUG)
 
-        metric = GEval(
-            name=metric_name,
-            model=self._judge,
-            criteria=criteria,
-            evaluation_params=[
-                LLMTestCaseParams.INPUT,
-                LLMTestCaseParams.ACTUAL_OUTPUT,
-            ],
-            threshold=threshold,
-        )
-        test_case = LLMTestCase(input=last_input, actual_output=actual_output)
-        assert_test(test_case, [metric])
-        return self
+    def _log_prompt_limit(self) -> int:
+        return get_config().judge.log_prompt_chars
+
+    def _log_response_limit(self) -> int:
+        return get_config().judge.log_response_chars
+
+    @staticmethod
+    def _short_text(text: str, limit: int) -> str:
+        if limit <= 0 or len(text) <= limit:
+            return text
+        return f"{text[:limit]}...<truncated {len(text) - limit} chars>"
+
+    @classmethod
+    def _short_repr(cls, value: Any, limit: int) -> str:
+        text = repr(value)
+        return cls._short_text(text, limit)
 
     # ======================================================================
     # Public properties
@@ -379,6 +906,42 @@ class AgentSession:
     def registry(self) -> MetricRegistry:
         return self._registry
 
+    @property
+    def last_eval_result(self) -> Any:
+        """Last :class:`GEvalResult` from ``evaluate_direct()``. / Последний GEvalResult из evaluate_direct()."""
+        return self._last_eval_result
+
+    def to_trace_dict(self) -> dict[str, Any]:
+        """Return a structured session snapshot for diagnostics/reporting."""
+        trace: dict[str, Any] = {
+            "session_id": self._client.session_id,
+            "turn": self._turn,
+            "init_data": self._init_data,
+            "init_message": self._init_message,
+            "history": list(self._history),
+            "timings": list(self._timings),
+            "last_response": None,
+            "last_eval_result": None,
+        }
+        if self._last is not None:
+            trace["last_response"] = {
+                "status_code": self._last.status_code,
+                "text": self._last.text,
+                "metadata": self._last.metadata,
+                "raw": self._last.raw,
+            }
+        if self._last_eval_result is not None:
+            result = self._last_eval_result
+            trace["last_eval_result"] = {
+                "score": getattr(result, "score", None),
+                "raw_scores": list(getattr(result, "raw_scores", []) or []),
+                "passed": getattr(result, "passed", None),
+                "reasoning": getattr(result, "reasoning", ""),
+                "evaluation_steps": list(getattr(result, "evaluation_steps", []) or []),
+                "raw_responses": list(getattr(result, "raw_responses", []) or []),
+            }
+        return trace
+
     # ======================================================================
     # Internal
     # ======================================================================
@@ -388,3 +951,24 @@ class AgentSession:
         assert self._last is not None, (
             "No response from agent. Call send() first."
         )
+
+
+def run_dialogue(
+    session: "AgentSession",
+    messages: list[str],
+    *,
+    expect_ok: bool = True,
+) -> "AgentSession":
+    """Send every message in *messages* sequentially.
+
+    When *expect_ok* is ``True`` (default), each turn is followed by
+    ``expect_response_ok()``.
+
+    Отправляет каждое сообщение из *messages* последовательно. При *expect_ok*
+    ``True`` (по умолчанию) после каждого хода вызывается ``expect_response_ok()``.
+    """
+    for msg in messages:
+        session.send(msg)
+        if expect_ok:
+            session.expect_response_ok()
+    return session

@@ -1,31 +1,40 @@
 """
-LLM-as-Judge adapters for DeepEval.
+LLM-as-Judge adapters.
 
-* :class:`BaseLLMJudge` — abstract base that extends ``DeepEvalBaseLLM``.
+* :class:`BaseLLMJudge` — abstract base for judge implementations.
+  When ``deepeval`` is installed, also extends ``DeepEvalBaseLLM``
+  so judges can be passed directly to DeepEval's ``GEval`` metric.
 * :class:`GigaChatJudge` — GigaChat via mTLS (extra ``gigachat``).
 * :class:`OpenAIJudge` — OpenAI-compatible APIs (extra ``openai``).
 * :class:`AnthropicJudge` — Anthropic Claude API (extra ``anthropic``).
+* :func:`create_judge_from_config` — factory that builds the right judge
+  from ``[judge]`` section of ``agent-test-kit.toml``.
 
-Адаптеры LLM-as-Judge для DeepEval. Базовый класс BaseLLMJudge расширяет
-DeepEvalBaseLLM; GigaChatJudge — GigaChat через mTLS; OpenAIJudge — OpenAI-
-совместимые API; AnthropicJudge — Anthropic Claude API.
+Адаптеры LLM-as-Judge. Базовый класс BaseLLMJudge — абстрактная база;
+при установленном deepeval наследует DeepEvalBaseLLM для совместимости.
 """
 from __future__ import annotations
 
 import logging
 import os
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
-from deepeval.models import DeepEvalBaseLLM
+try:
+    from deepeval.models import DeepEvalBaseLLM
+    _DEEPEVAL_AVAILABLE = True
+except ImportError:
+    _DEEPEVAL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+_JudgeBase = DeepEvalBaseLLM if _DEEPEVAL_AVAILABLE else ABC
 
 
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
 
-class BaseLLMJudge(DeepEvalBaseLLM):
+class BaseLLMJudge(_JudgeBase):  # type: ignore[misc]
     """Extend this class to plug in any LLM as a judge for ``evaluate()``.
 
     Расширьте этот класс, чтобы подключить любой LLM в качестве судьи для ``evaluate()``.
@@ -40,7 +49,7 @@ class BaseLLMJudge(DeepEvalBaseLLM):
         return self.generate(prompt)
 
     def load_model(self):
-        """Return model name for DeepEval. / Возвращает имя модели для DeepEval."""
+        """Return model name for DeepEval compatibility. / Возвращает имя модели для совместимости с DeepEval."""
         return self.get_model_name()
 
     @abstractmethod
@@ -265,9 +274,101 @@ class AnthropicJudge(BaseLLMJudge):
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )
-        text = response.content[0].text
+        texts: list[str] = []
+        block_types: list[str] = []
+        for block in getattr(response, "content", []):
+            if isinstance(block, dict):
+                block_types.append(str(block.get("type", "dict")))
+                block_text = block.get("text")
+            else:
+                block_types.append(type(block).__name__)
+                block_text = getattr(block, "text", None)
+            if isinstance(block_text, str) and block_text.strip():
+                texts.append(block_text)
+
+        if not texts:
+            raise ValueError(
+                "Anthropic response has no text blocks. "
+                f"Block types: {block_types}"
+            )
+
+        text = "\n".join(texts)
         logger.debug("<<< Anthropic judge response (%d chars)", len(text))
         return text
 
     def get_model_name(self) -> str:
         return self.model_name
+
+
+# ---------------------------------------------------------------------------
+# Factory: build judge from config
+# ---------------------------------------------------------------------------
+
+def create_judge_from_config(
+    judge_cfg: "JudgeConfig | None" = None,
+) -> BaseLLMJudge:
+    """Instantiate the right judge adapter from ``[judge]`` config section.
+
+    Reads ``provider``, ``api_base_url``, ``model_name``, ``api_key_env``
+    (env-var name), ``judge_temperature``, ``max_tokens``, ``timeout``
+    from :class:`JudgeConfig`.
+
+    Создаёт нужный judge-адаптер по секции ``[judge]`` конфига.
+    """
+    if judge_cfg is None:
+        from agent_test_kit.config import get_config
+        judge_cfg = get_config().judge
+
+    provider = judge_cfg.provider.lower()
+    base_url = judge_cfg.api_base_url or None
+    model = judge_cfg.model_name
+
+    if provider == "gigachat":
+        if not judge_cfg.cert_file or not judge_cfg.key_file:
+            raise ValueError(
+                "GigaChatJudge requires cert_file and key_file in [judge] config. "
+                "Set judge.cert_file and judge.key_file in agent-test-kit.toml."
+            )
+        return GigaChatJudge(
+            model_name=model or "GigaChat-Max",
+            base_url=base_url or "",
+            cert_file=judge_cfg.cert_file,
+            key_file=judge_cfg.key_file,
+            verify_ssl=judge_cfg.verify_ssl,
+            timeout=judge_cfg.timeout,
+        )
+
+    api_key = judge_cfg.api_key or None
+    if not api_key and judge_cfg.api_key_env:
+        api_key = os.getenv(judge_cfg.api_key_env)
+
+    if not api_key:
+        hint = (
+            f"Set judge.api_key in agent-test-kit.toml, "
+            f"or set env var ${judge_cfg.api_key_env or 'ANTHROPIC_API_KEY'}"
+        )
+        raise ValueError(f"Judge API key not found. {hint}")
+
+    if provider == "anthropic":
+        return AnthropicJudge(
+            model_name=model or "claude-sonnet-4-20250514",
+            api_key=api_key,
+            base_url=base_url,
+            temperature=judge_cfg.judge_temperature,
+            max_tokens=judge_cfg.max_tokens,
+            timeout=judge_cfg.timeout,
+        )
+
+    if provider == "openai":
+        return OpenAIJudge(
+            model_name=model or "gpt-4o",
+            api_key=api_key,
+            base_url=base_url,
+            temperature=judge_cfg.judge_temperature,
+            timeout=judge_cfg.timeout,
+        )
+
+    raise ValueError(
+        f"Unsupported judge provider: '{provider}'. "
+        f"Supported: anthropic, openai, gigachat."
+    )
