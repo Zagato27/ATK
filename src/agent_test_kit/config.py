@@ -25,6 +25,7 @@ Programmatic override::
 from __future__ import annotations
 
 import logging
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _CONFIG_FILENAME = "agent-test-kit.toml"
+_CONFIG_ENV_VAR = "ATK_CONFIG_PATH"
 
 
 # ======================================================================
@@ -324,21 +326,27 @@ def load_config(start_dir: Path | None = None) -> Config:
     """
     cfg = Config()
 
-    toml_path = _find_file(_CONFIG_FILENAME, start_dir)
-    if toml_path:
-        logger.info("Loading config from %s", toml_path)
+    env_path = os.getenv(_CONFIG_ENV_VAR)
+    if env_path:
+        toml_path = Path(env_path).expanduser().resolve()
+        logger.info("Loading config from %s via %s", toml_path, _CONFIG_ENV_VAR)
         raw = _load_from_toml(toml_path)
     else:
-        pyproject = _find_file("pyproject.toml", start_dir)
-        if pyproject:
-            full = _load_from_toml(pyproject)
-            raw = full.get("tool", {}).get("agent-test-kit", {})
-            if raw:
-                logger.info("Loading config from %s [tool.agent-test-kit]", pyproject)
+        toml_path = _find_file(_CONFIG_FILENAME, start_dir)
+        if toml_path:
+            logger.info("Loading config from %s", toml_path)
+            raw = _load_from_toml(toml_path)
+        else:
+            pyproject = _find_file("pyproject.toml", start_dir)
+            if pyproject:
+                full = _load_from_toml(pyproject)
+                raw = full.get("tool", {}).get("agent-test-kit", {})
+                if raw:
+                    logger.info("Loading config from %s [tool.agent-test-kit]", pyproject)
+                else:
+                    raw = {}
             else:
                 raw = {}
-        else:
-            raw = {}
 
     section_map = {
         "agent": cfg.agent,

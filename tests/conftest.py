@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+os.environ.setdefault("ATK_CONFIG_PATH", str(ROOT_DIR / "agent-test-kit.toml"))
 
 from agent_test_kit import (
     AgentResponse,
@@ -88,10 +89,22 @@ def agent_client():
 def judge_llm():
     """Real judge built from config. No mock fallback is used."""
     cfg = get_config()
+    provider = cfg.judge.provider.lower()
     has_direct_key = bool(cfg.judge.api_key)
     has_env_key = bool(cfg.judge.api_key_env and os.getenv(cfg.judge.api_key_env))
+    has_cert_pair = bool(cfg.judge.cert_file and cfg.judge.key_file)
+    has_env_cert_pair = bool(
+        cfg.judge.cert_file_env and os.getenv(cfg.judge.cert_file_env)
+        and cfg.judge.key_file_env and os.getenv(cfg.judge.key_file_env)
+    )
 
-    if not (has_direct_key or has_env_key):
+    if provider == "gigachat":
+        if not (has_cert_pair or has_env_cert_pair):
+            raise RuntimeError(
+                "GigaChat judge is not configured. Set [judge].cert_file/[judge].key_file "
+                "or [judge].cert_file_env/[judge].key_file_env in agent-test-kit.toml."
+            )
+    elif not (has_direct_key or has_env_key):
         raise RuntimeError(
             "Judge is not configured. Set [judge].api_key or [judge].api_key_env "
             "in agent-test-kit.toml."
