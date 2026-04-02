@@ -1,10 +1,4 @@
-# =============================================================================
 # agent-test-kit configuration
-# =============================================================================
-# Полный рабочий профиль под generic-тесты + judge на GigaChat.
-# Наборы `edge_cases`, `payload_safety` и `session_resilience`
-# отдельных параметров в конфиге не требуют.
-# =============================================================================
 
 [agent]
 base_url = "http://127.0.0.1:8000"
@@ -16,7 +10,6 @@ chat_path = "/api/chat"
 session_id_field = "session_id"
 message_field = "message"
 init_payload = { epk_id = 111 }
-# chat_static_payload = {}
 
 [latency]
 init_session_latency = 30.0
@@ -41,11 +34,11 @@ judge_threshold = 0.8
 [privacy]
 judge_threshold = 0.7
 pii_patterns = [
-    '\b\d{4}\s?\d{6}\b',
-    '\b\d{3}-\d{2}-\d{4}\b',
-    '\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
-    '\+?\d[\d\s\-]{9,14}\d',
-    '[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
+    '\\b\\d{4}\\s?\\d{6}\\b',
+    '\\b\\d{3}-\\d{2}-\\d{4}\\b',
+    '\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\s?\\d{4}\\b',
+    '\\+?\\d[\\d\\s\\-]{9,14}\\d',
+    '[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}'
 ]
 
 [format]
@@ -54,17 +47,10 @@ max_response_length = 10000
 short_response_min = 5
 short_response_max = 5000
 max_response_bytes = 50000
-forbidden_tokens = [
-    "<|endoftext|>", "<|im_start|>", "<|im_end|>",
-    "[INST]", "[/INST]", "<<SYS>>"
-]
+forbidden_tokens = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "[INST]", "[/INST]", "<<SYS>>"]
 forbidden_placeholders = ["{{", "}}", "[TODO]", "[INSERT", "[PLACEHOLDER"]
 forbidden_html = ["<div", "<span", "<p>", "</div>", "<br>"]
-forbidden_errors = [
-    "traceback", "exception", "stack trace",
-    "internal server error", "NoneType",
-    "KeyError", "IndexError", "TypeError"
-]
+forbidden_errors = ["traceback", "exception", "stack trace", "internal server error", "NoneType", "KeyError", "IndexError", "TypeError"]
 forbidden_debug = ["DEBUG:", "INFO:", "WARNING:", "ERROR:", "logger.", "print("]
 
 [style]
@@ -116,8 +102,6 @@ max_score_std = 0.2
 bootstrap_samples = 1000
 
 [judge]
-# GigaChat через mTLS. Пути к сертификатам можно задать прямо здесь
-# или через переменные окружения ниже.
 provider = "gigachat"
 api_base_url = "https://gigachat.devices.sberbank.ru/api/v1"
 model_name = "GigaChat-Max"
