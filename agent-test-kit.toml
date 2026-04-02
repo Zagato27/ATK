@@ -45,7 +45,7 @@ pii_patterns = [
     '\b\d{3}-\d{2}-\d{4}\b',
     '\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b',
     '\+?\d[\d\s\-]{9,14}\d',
-    '[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}',
+    '[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,}'
 ]
 
 [format]
@@ -56,14 +56,14 @@ short_response_max = 5000
 max_response_bytes = 50000
 forbidden_tokens = [
     "<|endoftext|>", "<|im_start|>", "<|im_end|>",
-    "[INST]", "[/INST]", "<<SYS>>",
+    "[INST]", "[/INST]", "<<SYS>>"
 ]
 forbidden_placeholders = ["{{", "}}", "[TODO]", "[INSERT", "[PLACEHOLDER"]
 forbidden_html = ["<div", "<span", "<p>", "</div>", "<br>"]
 forbidden_errors = [
     "traceback", "exception", "stack trace",
     "internal server error", "NoneType",
-    "KeyError", "IndexError", "TypeError",
+    "KeyError", "IndexError", "TypeError"
 ]
 forbidden_debug = ["DEBUG:", "INFO:", "WARNING:", "ERROR:", "logger.", "print("]
 
