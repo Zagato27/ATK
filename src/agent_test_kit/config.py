@@ -231,6 +231,8 @@ class JudgeConfig:
     # -- GigaChat mTLS (provider = "gigachat") ----------------------------------
     cert_file: str = ""
     key_file: str = ""
+    cert_file_env: str = ""
+    key_file_env: str = ""
     verify_ssl: bool = False
 
     # -- G-Eval pipeline --------------------------------------------------------

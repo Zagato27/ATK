@@ -324,16 +324,23 @@ def create_judge_from_config(
     model = judge_cfg.model_name
 
     if provider == "gigachat":
-        if not judge_cfg.cert_file or not judge_cfg.key_file:
+        cert_file = judge_cfg.cert_file or (
+            os.getenv(judge_cfg.cert_file_env) if judge_cfg.cert_file_env else ""
+        )
+        key_file = judge_cfg.key_file or (
+            os.getenv(judge_cfg.key_file_env) if judge_cfg.key_file_env else ""
+        )
+        if not cert_file or not key_file:
             raise ValueError(
                 "GigaChatJudge requires cert_file and key_file in [judge] config. "
-                "Set judge.cert_file and judge.key_file in agent-test-kit.toml."
+                "Set judge.cert_file/judge.key_file or "
+                "judge.cert_file_env/judge.key_file_env in agent-test-kit.toml."
             )
         return GigaChatJudge(
             model_name=model or "GigaChat-Max",
             base_url=base_url or "",
-            cert_file=judge_cfg.cert_file,
-            key_file=judge_cfg.key_file,
+            cert_file=cert_file,
+            key_file=key_file,
             verify_ssl=judge_cfg.verify_ssl,
             timeout=judge_cfg.timeout,
         )

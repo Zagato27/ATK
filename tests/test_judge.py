@@ -2,7 +2,9 @@
 
 import pytest
 
-from agent_test_kit.judge import AnthropicJudge
+import agent_test_kit.judge as judge_module
+from agent_test_kit.config import JudgeConfig
+from agent_test_kit.judge import AnthropicJudge, create_judge_from_config
 
 
 class _DummyMessages:
@@ -72,3 +74,44 @@ class TestAnthropicJudgeGenerate:
         )
         with pytest.raises(ValueError, match="no text blocks"):
             judge.generate("ping")
+
+
+class TestCreateJudgeFromConfig:
+    def test_gigachat_uses_env_paths_for_certificates(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        class _StubGigaChatJudge:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setenv("GIGACHAT_CERT_FILE", r"C:\certs\client.pem")
+        monkeypatch.setenv("GIGACHAT_KEY_FILE", r"C:\certs\client.key")
+        monkeypatch.setattr(judge_module, "GigaChatJudge", _StubGigaChatJudge)
+
+        cfg = JudgeConfig(
+            provider="gigachat",
+            model_name="GigaChat-Max",
+            api_base_url="https://gigachat.devices.sberbank.ru/api/v1",
+            cert_file_env="GIGACHAT_CERT_FILE",
+            key_file_env="GIGACHAT_KEY_FILE",
+            verify_ssl=True,
+            timeout=90,
+        )
+
+        judge = create_judge_from_config(cfg)
+
+        assert isinstance(judge, _StubGigaChatJudge)
+        assert captured == {
+            "model_name": "GigaChat-Max",
+            "base_url": "https://gigachat.devices.sberbank.ru/api/v1",
+            "cert_file": r"C:\certs\client.pem",
+            "key_file": r"C:\certs\client.key",
+            "verify_ssl": True,
+            "timeout": 90,
+        }
+
+    def test_gigachat_requires_certificates_or_envs(self):
+        cfg = JudgeConfig(provider="gigachat")
+
+        with pytest.raises(ValueError, match="cert_file"):
+            create_judge_from_config(cfg)
